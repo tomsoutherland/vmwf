@@ -1,15 +1,15 @@
+use strict;
 #
 # set the following to match your environment
 #
-# copy edited file to ~/.vmwf
-#
-use strict;
 our $vmdiskdir = $ENV{'HOME'}."/Documents/VMdisks"; # path for shared disks
 our $vmrun     = "'/Applications/VMware Fusion.app/Contents/Library/vmrun'";
 our $vmdisk    = "'/Applications/VMware Fusion.app/Contents/Library/vmware-vdiskmanager'";
 our $vmrunargs = "-T fusion";
 our $socat     = "/usr/local/bin/socat";
 our $socatargs = "-,raw,echo=0,escape=0x1d";
-
+#
+# copy edited file to ~/.vmwf
+#
 # leave ;1
 1;
