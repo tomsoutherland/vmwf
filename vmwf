@@ -19,17 +19,18 @@ our $socat = "/usr/local/bin/socat";
 our $socatargs = "-,raw,echo=0,escape=0x1d";
 our %diskhash;
 our $vms;
-my $opt_string='n:vgblhpa:c:s:N:';
+my $opt_string='n:vgbldhpa:c:s:N:';
 our $usagemsg = "
     usage:
 
-    $0 -l [ -v ]
+    $0 -l [ -d ] [ -v ]
     $0 -n VM -b [ -v ] [ -g ]
     $0 -n VM -p [ -v ]
     $0 -a X -c X -s XX -N VMx,VMy,VMz,... [ -v ]
     $0 -h
 
     -l : list VMware machines
+    -d : delete orphaned disks
     -n : name of the VMware machine
     -b : power on and boot machine
     -v : verbose
@@ -47,6 +48,7 @@ our $usagemsg = "
 getopts( "$opt_string", \%opt ) or usage(1);
 if($opt{h}){ usage(0); }
 readvms();
+if(! -d "$vmdiskdir"){ make_path("$vmdiskdir") }
 if($opt{l}){ listvms(); exit; }
 if($opt{a}){ add_disks(); exit; }
 if(! $opt{n}){ usage(1); }
@@ -59,7 +61,6 @@ sub add_disks {
   if( ! $opt{s} ){ $opt{s} = "500MB"; }
   my $cmdstring;
   for(my $i=0; $i<$opt{a}; $i++){
-    if(! -d "$vmdiskdir"){ make_path("$vmdiskdir") }
     print "Using $vmdiskdir for shared storage.\n" if $opt{v};
     my $diskname = disk_tmpfile();
     print "creating $diskname\n" if $opt{v};
@@ -157,7 +158,13 @@ sub listvms {
     next if /^\./;
     my $key = $vmdiskdir."/".$_;
     if(! defined $diskhash{$key}){
-      print "Orphan disk: $key\n";
+      if($opt{d}){
+        my @files = ($key, $key.'-flat');
+        print "Removing orphan disk: $key\n";
+        unlink(@files);
+      }else{
+        print "Orphan disk: $key\n";
+      }
     }
   }
 }
