@@ -12,4 +12,5 @@ our $socatargs = "-,raw,echo=0,escape=0x1d";
 # copy edited file to ~/.vmwf
 #
 # leave ;1
+#
 1;
