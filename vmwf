@@ -8,15 +8,13 @@ use Getopt::Std;
 use strict;
 use File::Path qw(make_path);
 use File::Temp qw(tempfile);
-
 use vars qw/ %opt /;
 
-our $vmdiskdir = $ENV{'HOME'}."/Documents/VMdisks"; # path for shared disks
-our $vmrun = "'/Applications/VMware Fusion.app/Contents/Library/vmrun'";
-our $vmdisk = "'/Applications/VMware Fusion.app/Contents/Library/vmware-vdiskmanager'";
-our $vmrunargs = "-T fusion";
-our $socat = "/usr/local/bin/socat";
-our $socatargs = "-,raw,echo=0,escape=0x1d";
+# read in the config file
+our ($vmdiskdir,$vmrun,$vmdisk,$vmrunargs,$socat,$socatargs);
+my $config_file = $ENV{'HOME'}."/.vmwf";
+require $config_file;
+
 our %diskhash;
 our $vms;
 my $opt_string='n:vgbldhpa:c:s:N:';
@@ -198,7 +196,8 @@ sub consoleconnect {
   my($pipefoo)=@_;
   if(! -e $pipefoo){ die "Console pipe does not exist: $pipefoo"; }
   system("clear");
-  my $cmdstring = $socat." ".$socatargs." ".$pipefoo;
+  my $cmdstring = $socat." ".$socatargs." "."'$pipefoo'";
+  if ($opt{v}){ print "running $cmdstring\n"; }
   exec($cmdstring)||die "exec failed: $cmdstring";
 }
 
