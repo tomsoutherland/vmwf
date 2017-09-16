@@ -3,7 +3,10 @@ This is a perl program written to manage VMware Fusion
 virtual hosts on a Mac system. Although not tested, it
 could be modified to work with other VMware virtualization
 platforms. You will also need to install 'socat' as this
-handles the I/O to the console device (pipe).
+handles the I/O to the console device (pipe). When a VM is booted,
+/vmwf/ will injet a serial port into the VMs configuration file
+and create a named pipe for console communications. The VM will
+need to be configured to use a serial port console for this to work.
 
     usage:
 
