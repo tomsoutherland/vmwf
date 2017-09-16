@@ -1,0 +1,257 @@
+#!/usr/bin/perl
+#
+# script to boot and attach console
+# to headless vmware machine
+#
+use Data::Dumper;
+use Getopt::Std;
+use strict;
+use File::Path qw(make_path);
+use File::Temp qw(tempfile);
+
+use vars qw/ %opt /;
+
+our $vmdiskdir = $ENV{'HOME'}."/Documents/VMdisks"; # path for shared disks
+our $vmrun = "'/Applications/VMware Fusion.app/Contents/Library/vmrun'";
+our $vmdisk = "'/Applications/VMware Fusion.app/Contents/Library/vmware-vdiskmanager'";
+our $vmrunargs = "-T fusion";
+our $socat = "/usr/local/bin/socat";
+our $socatargs = "-,raw,echo=0,escape=0x1d";
+our %diskhash;
+our $vms;
+my $opt_string='n:vgblhpa:c:s:N:';
+our $usagemsg = "
+    usage:
+
+    $0 -l [ -v ]
+    $0 -n VM -b [ -v ] [ -g ]
+    $0 -n VM -p [ -v ]
+    $0 -a X -c X -s XX -N VMx,VMy,VMz,... [ -v ]
+    $0 -h
+
+    -l : list VMware machines
+    -n : name of the VMware machine
+    -b : power on and boot machine
+    -v : verbose
+    -g : enable GUI
+    -p : power off machine
+    -a : add X drives
+    -c : controller number should be 0, 1, 2, or 3
+    -s : size of drive(s), xxKB, xxMB, xxGB
+    -N : comma seperated list of VMs to which the disks should be attached
+    -h : duh!
+
+    Note: The key sequence, \"Control ]\" (^]) disconnects from the console leaving the VM running.
+";
+
+getopts( "$opt_string", \%opt ) or usage(1);
+if($opt{h}){ usage(0); }
+readvms();
+if($opt{l}){ listvms(); exit; }
+if($opt{a}){ add_disks(); exit; }
+if(! $opt{n}){ usage(1); }
+our $conpipe="/tmp/vm-".$opt{n}."-console";
+our $titlebar=$opt{n}." console";
+
+sub add_disks {
+  if( ! $opt{N} ){ usage(1); }
+  if( ! $opt{c} ){ $opt{c} = "0"; }
+  if( ! $opt{s} ){ $opt{s} = "500MB"; }
+  my $cmdstring;
+  for(my $i=0; $i<$opt{a}; $i++){
+    if(! -d "$vmdiskdir"){ make_path("$vmdiskdir") }
+    print "Using $vmdiskdir for shared storage.\n" if $opt{v};
+    my $diskname = disk_tmpfile();
+    print "creating $diskname\n" if $opt{v};
+    if($opt{v}){
+      $cmdstring = "$vmdisk -c -s $opt{s} -t 2 -a lsilogic $diskname";
+    }else{
+      $cmdstring = "$vmdisk -c -q -s $opt{s} -t 2 -a lsilogic $diskname";
+    }
+    system($cmdstring) == 0 or die "system $cmdstring failed: $?";
+    foreach my $vm(split(/\,/,$opt{N})){ disk_attach($vm, $diskname) }
+  }
+}
+
+sub disk_tmpfile {
+  (undef, my $diskname) = tempfile("vmdiskXXXX", DIR=>"$vmdiskdir", OPEN=>0, SUFFIX=>"");
+  return($diskname);
+}
+
+sub disk_attach {
+  my($vm, $diskname) = @_;
+  print "Attaching $diskname to $vm\n" if $opt{v};
+  my(%foohash, $cmdstring);
+  my $foo = $vms->{$vm}->{'foo'};
+  open(foo,"$foo")||die $!;
+  while(<foo>){ chomp;
+    if(/^(.*) \= \"(.*)\"/){ $foohash{$1}=$2 }
+  }
+  close foo;
+  for(my $i=0; $i<15; $i++){
+    my $key = "scsi" . "$opt{c}" . ":" . "${i}";
+    next if defined $foohash{$key.".fileName"};
+    $foohash{$key.".fileName"} = $diskname;
+    $foohash{$key.".present"} = "TRUE";
+    $foohash{$key.".redo"} = "";
+    print "Attached $diskname to $vm at $key\n" if $opt{v};
+    last;
+  }
+  $foohash{'scsi0.sharedBus'}="virtual";
+  $foohash{'scsi1.present'}="TRUE";
+  $foohash{'scsi1.virtualDev'}="lsilogic";
+  $foohash{'scsi1.sharedBus'}="virtual";
+  $foohash{'scsi2.present'}="TRUE";
+  $foohash{'scsi2.virtualDev'}="lsilogic";
+  $foohash{'scsi2.sharedBus'}="virtual";
+  $foohash{'scsi3.present'}="TRUE";
+  $foohash{'scsi3.virtualDev'}="lsilogic";
+  $foohash{'scsi3.sharedBus'}="virtual";
+  $foohash{'disk.locking'}="FALSE";
+  open(foo,"> $foo")||die $!;
+  foreach my $key(sort(keys(%foohash))){ print foo "$key = \"$foohash{$key}\"\n"; }
+  close foo;
+}
+
+sub readvms {
+  # read in all the configured VMs
+  my $vmdir;
+  my $foohash;
+  print "Reading $ENV{'HOME'}/Library/Application Support/VMware Fusion/vmInventory\n" if $opt{v};
+  open(foo, "$ENV{'HOME'}/Library/Application Support/VMware Fusion/vmInventory")||die $!;
+  while(<foo>){ chomp;
+    if(/(^\S+)\.config.*\"(.*)\"/){ $foohash->{$1}->{'foo'} = $2 }
+    if(/(^\S+)\.DisplayName.*\"(.*)\"/){ $foohash->{$1}->{'name'} = $2 }
+  }
+  foreach my $key(keys(%{$foohash})){
+    next if ($foohash->{$key}->{'name'} eq "");
+    my $vm = $foohash->{$key}->{'name'};
+    my $cfg = $foohash->{$key}->{'foo'};
+    $vms->{$vm}->{'foo'} = "$cfg";
+    $vms->{$vm}->{'state'} = "Down";
+  }
+  open(foo, "$vmrun list |")||die $!;
+  while(<foo>){ chomp;
+    my @tokens = split(/\//,$_);
+    foreach my $t(@tokens){
+      if($t =~ /(^.*)\.vmwarevm/){ $vms->{$1}->{'state'}="Running"; }
+    }
+  }
+  foreach my $vm(sort keys(%{$vms})){ readvm($vm) }
+}
+
+sub listvms {
+  my ($vm, $maxl);
+  print "\n\n  Virtual Machines\n\n";
+  foreach $vm(sort keys(%{$vms})){ my $l=length($vm); if($l>$maxl){$maxl=$l;} }
+  foreach $vm(sort keys(%{$vms})){
+    my $n = $vm;
+    while(length($n)<$maxl){ $n=" ".$n; }
+    print "    $n  ::  $vms->{$vm}->{'state'}\n";
+  }
+  print "\n\n";
+  # report on orphaned disks
+  opendir(my $dh, $vmdiskdir)||die $!;
+  while(readdir $dh){
+    next if /\S+flat/;
+    next if /^\./;
+    my $key = $vmdiskdir."/".$_;
+    if(! defined $diskhash{$key}){
+      print "Orphan disk: $key\n";
+    }
+  }
+}
+
+if($opt{b}){
+  # set the title bar
+  set_title_bar($titlebar);
+
+  # connect console if running
+  if(checkrunning($opt{n})){ consoleconnect($conpipe); }
+
+  # boot machine
+  bootmachine($opt{n});
+  if(checkrunning($opt{n})){ consoleconnect($conpipe); }
+  die "Can not boot or console to $opt{n}";
+}
+
+if($opt{p}){
+  my $vm = $opt{n};
+  my $foo = $vms->{$vm}->{'foo'};
+  my $cmdstring = "$vmrun $vmrunargs stop '$foo'";
+  system($cmdstring);
+}
+
+sub set_title_bar {
+  my($titlebar)=@_;
+  print "\033]0;${titlebar}\007";
+}
+
+sub consoleconnect {
+  my($pipefoo)=@_;
+  if(! -e $pipefoo){ die "Console pipe does not exist: $pipefoo"; }
+  system("clear");
+  my $cmdstring = $socat." ".$socatargs." ".$pipefoo;
+  exec($cmdstring)||die "exec failed: $cmdstring";
+}
+
+sub checkrunning {
+  my($vm)=@_;
+  # print "checkrunning::$vm\n";
+  if($vms->{$vm}->{'state'} eq "Running"){ return(1) }else{ return(0) }
+}
+
+sub readvm {
+  my ($vm) = @_;
+  my $foo = $vms->{$vm}->{'foo'};
+  open(foo,"$foo")||die $!." $vm";
+  while(<foo>){ chomp;
+    if(/(.*fileName) \= \"(${vmdiskdir}.*)\"/){ $diskhash{$2}=$1; }
+  }
+  close foo;
+}
+
+sub bootmachine {
+  my($vm)=@_;
+  my(%foohash, $cmdstring);
+  my $foo = $vms->{$vm}->{'foo'};
+  # print "$foo\n";
+  # fixup the config
+  open(foo,"$foo")||die $!;
+  while(<foo>){ chomp;
+    if(/^displayname/i){ next }
+    if(/^(.*) \= \"(.*)\"/){ $foohash{$1}=$2 }
+  }
+  close foo;
+  # add needed items to the config and write it out
+  $foohash{'serial0.fileName'}="$conpipe";
+  $foohash{'serial0.fileType'}="pipe";
+  $foohash{'serial0.present'}="TRUE";
+  $foohash{'serial0.startConnected'}="TRUE";
+  $foohash{'displayname'}="$opt{n}";
+  open(foo,"> $foo")||die $!;
+  foreach my $key(sort(keys(%foohash))){ print foo "$key = \"$foohash{$key}\"\n"; }
+  close foo;
+  # now boot the vm
+  if($opt{g}){
+    $cmdstring = "$vmrun $vmrunargs start '$foo' gui";
+  }else{
+    $cmdstring = "$vmrun $vmrunargs start '$foo' nogui";
+  }
+  defined(my $pid = fork)||die "Can't fork: $!";
+  if($pid){
+    # wait a bit for the machine to start
+    sleep 5;
+    # refresh vms state
+    &readvms;
+  }else{
+    # child needs to exec the vm start command
+    exec($cmdstring)||die $!;
+  }
+}
+
+sub usage {
+  my($err)=@_;
+  print qq|$usagemsg\n|;
+  exit($err);
+}
