@@ -235,6 +235,7 @@ sub bootmachine {
   $foohash{'serial0.present'}="TRUE";
   $foohash{'serial0.startConnected'}="TRUE";
   $foohash{'displayname'}="$opt{n}";
+  $foohash{'disk.enableUUID'}="TRUE";
   open(foo,"> $foo")||die $!;
   foreach my $key(sort(keys(%foohash))){ print foo "$key = \"$foohash{$key}\"\n"; }
   close foo;
